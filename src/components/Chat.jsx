@@ -1,96 +1,227 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { db } from "../firebase";
-import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, setDoc } from "firebase/firestore";
+import {
+  collection,
+  query,
+  orderBy,
+  limit,
+  startAfter,
+  onSnapshot,
+  addDoc,
+  doc,
+  setDoc,
+  writeBatch,
+  Timestamp,
+  getDocs,
+  getDoc,
+} from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
 
-export default function Chat({ otherUser, onClose }) {
+export default function Chat({ otherUser, onClose, isOpen }) {
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
-  const [text, setText] = useState('');
-  const [inputFocused, setInputFocused] = useState(false);
-  const messagesEndRef = useRef();
-  const chatId = [user.uid, otherUser.uid].sort().join('_');
+  const [text, setText] = useState("");
+  const [lastVisible, setLastVisible] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [newMsgCount, setNewMsgCount] = useState(0);
+  const containerRef = useRef();
+  const observerRefs = useRef({});
 
+  const CHAT_BATCH_SIZE = 25;
+
+  // Get chatId
+  const getChatId = async () => {
+    const possibleChatIds = [`${user.uid}_${otherUser.uid}`, `${otherUser.uid}_${user.uid}`];
+    for (let id of possibleChatIds) {
+      const docSnap = await getDoc(doc(db, "chats", id));
+      if (docSnap.exists()) return id;
+    }
+    return [user.uid, otherUser.uid].sort().join("_");
+  };
+
+  // Load messages batch
+  const loadMessages = useCallback(
+    async (loadOlder = false) => {
+      if (!otherUser) return;
+      const chatId = await getChatId();
+      const msgsRef = collection(db, "chats", chatId, "messages");
+
+      let q = query(msgsRef, orderBy("ts", "desc"), limit(CHAT_BATCH_SIZE));
+
+      if (loadOlder && lastVisible) {
+        q = query(msgsRef, orderBy("ts", "desc"), startAfter(lastVisible), limit(CHAT_BATCH_SIZE));
+      }
+
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const msgsBatch = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        if (loadOlder) {
+          setMessages((prev) => [...prev, ...msgsBatch]);
+        } else {
+          setMessages(msgsBatch);
+        }
+        setLastVisible(snap.docs[snap.docs.length - 1]);
+        if (snap.docs.length < CHAT_BATCH_SIZE) setHasMore(false);
+      } else {
+        setHasMore(false);
+      }
+    },
+    [otherUser, lastVisible]
+  );
+
+  // Listen to new messages in real-time
   useEffect(() => {
-    const q = query(collection(db, 'chats', chatId, 'messages'), orderBy('ts'));
-    const unsub = onSnapshot(q, snap => {
-      const msgs = snap.docs.map(doc => doc.data());
-      setMessages(msgs);
-      scrollToBottom();
-    });
-    return unsub;
-  }, [chatId]);
+    if (!otherUser) return;
+    let unsub;
+    const setupListener = async () => {
+      const chatId = await getChatId();
+      const msgsRef = collection(db, "chats", chatId, "messages");
+      const q = query(msgsRef, orderBy("ts", "desc"), limit(CHAT_BATCH_SIZE));
 
-  const scrollToBottom = () => {
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
-  };
+      unsub = onSnapshot(q, (snap) => {
+        const msgs = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        setMessages(msgs);
 
+        // Count new messages not in view
+        const unseenCount = msgs.filter((m) => m.from === otherUser.uid && !m.seen).length;
+        setNewMsgCount(unseenCount);
+      });
+    };
+    setupListener();
+    return () => unsub?.();
+  }, [otherUser]);
+
+  // Handle sending message
+  // In sendMessage, remove auto scroll
   const sendMessage = async () => {
-    if (!text.trim()) return;
-    const msg = { text: text.trim(), from: user.uid, ts: serverTimestamp() };
-    await addDoc(collection(db, 'chats', chatId, 'messages'), msg);
-    await setDoc(doc(db, 'chats', chatId), {
-      participants: [user.uid, otherUser.uid],
-      lastMessage: msg.text,
-      lastUpdated: serverTimestamp()
-    }, { merge: true });
-    setText('');
-    scrollToBottom();
+    if (!text.trim() || !otherUser) return;
+    const chatId = [user.uid, otherUser.uid].sort().join("_");
+
+    const msg = {
+      text: text.trim(),
+      from: user.uid,
+      ts: Timestamp.now(),
+      seen: false,
+    };
+
+    await addDoc(collection(db, "chats", chatId, "messages"), msg);
+    await setDoc(
+      doc(db, "chats", chatId),
+      {
+        participants: [user.uid, otherUser.uid],
+        lastMessage: msg.text,
+        lastUpdated: Timestamp.now(),
+      },
+      { merge: true }
+    );
+
+    setText("");
+    // Remove scrollToBottom() here
   };
+
+  // Remove the timeout and auto-scroll
+  const scrollToBottom = () => {
+    if (!containerRef.current) return;
+    containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: "smooth" });
+    setNewMsgCount(0);
+  };
+
+
+  // IntersectionObserver to mark messages as seen
+  const observeMessage = (id) => (node) => {
+    if (node) {
+      if (observerRefs.current[id]) observerRefs.current[id].disconnect();
+      const observer = new IntersectionObserver(async (entries) => {
+        entries.forEach(async (entry) => {
+          if (entry.isIntersecting) {
+            const chatId = await getChatId();
+            const msgRef = doc(db, "chats", chatId, "messages", id);
+            await setDoc(msgRef, { seen: true }, { merge: true });
+            observer.disconnect();
+          }
+        });
+      }, { threshold: 0.8 });
+      observer.observe(node);
+      observerRefs.current[id] = observer;
+    }
+  };
+
+  // Handle scroll for loading older messages
+  const handleScroll = () => {
+    if (!containerRef.current || !hasMore) return;
+    if (containerRef.current.scrollTop < 50) {
+      loadMessages(true);
+    }
+  };
+
+  if (!otherUser) return null;
 
   return (
-    <div className="relative flex flex-col h-screen w-full max-w-4xl mx-auto bg-[var(--bg)] text-[var(--accent)]">
-
+    <div className="fixed top-0 left-0 w-full h-full bg-[var(--bg)] flex flex-col z-50">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-[#111]">
         <div className="flex items-center gap-3">
           <img src={otherUser.photoURL} alt={otherUser.name} className="w-12 h-12 rounded-full" />
           <div>
             <div className="font-bold">{otherUser.name}</div>
-            <div className="text-sm text-[var(--muted)]">{otherUser.online ? 'Online' : 'Offline'}</div>
+            <div className="text-sm text-[var(--muted)]">{otherUser.online ? "Online" : "Offline"}</div>
           </div>
         </div>
-        <button onClick={onClose} className="border px-3 py-1 rounded hover:bg-white/10 transition">Close</button>
+        <button onClick={onClose} className="border px-3 py-1 rounded hover:bg-white/10 transition">Back</button>
       </div>
 
       {/* Messages */}
       <div
-        className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 bg-gradient-to-b from-[#0f0f10] to-[#111] transition-all"
-        style={{ paddingBottom: inputFocused ? '80px' : '20px' }}
+        className="flex-1 overflow-y-auto p-4 flex flex-col-reverse gap-3 bg-[#111]"
+        ref={containerRef}
+        onScroll={handleScroll}
       >
-        {messages.map((m, i) => (
-          <div key={i} className={`max-w-[70%] p-3 rounded-xl break-words ${m.from === user.uid ? 'self-end bg-[#222]' : 'self-start bg-[#191919]'}`}>
-            <div>{m.text}</div>
-            <div className="text-[var(--muted)] text-xs mt-1 text-right">
-              {m.ts?.seconds ? new Date(m.ts.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+        {messages.map((m) => {
+          const isSent = m.from === user.uid;
+          return (
+            <div
+              key={m.id}
+              ref={observeMessage(m.id)}
+              className={`max-w-[70%] p-3 rounded-xl ${isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"}`}
+            >
+              <div>{m.text}</div>
+              <div className="text-[var(--muted)] text-xs mt-1 flex justify-end gap-1 items-center">
+                {m.ts?.seconds &&
+                  new Date(m.ts.seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                {isSent && (
+                  <span className={`ml-1 text-sm ${m.seen ? "text-green-500" : "text-blue-400"}`}>
+                    {m.seen ? "✔✔" : "✔"}
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
-        <div ref={messagesEndRef}></div>
+          );
+        })}
+        {newMsgCount > 0 && (
+          <button
+            className="fixed bottom-24 left-1/2 transform -translate-x-1/2 bg-[var(--accent)] text-[var(--bg)] px-4 py-2 rounded-full"
+            onClick={scrollToBottom}
+          >
+            {newMsgCount} New
+          </button>
+        )}
       </div>
 
       {/* Input */}
-      <div
-        className={`fixed left-0 w-full max-w-4xl mx-auto px-4 z-20 transition-all`}
-        style={{ bottom: inputFocused ? '0' : '1rem' }}
-      >
-        <div className="flex gap-2">
-          <input
-            value={text}
-            onChange={e => setText(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && sendMessage()}
-            onFocus={() => setInputFocused(true)}
-            onBlur={() => setInputFocused(false)}
-            className="flex-1 p-3 rounded-2xl bg-[#0b0b0b] placeholder-[var(--muted)] outline-none shadow-inner"
-            placeholder="Type a message..."
-          />
-          <button
-            onClick={sendMessage}
-            className="bg-[var(--accent)] text-[var(--bg)] px-4 py-3 rounded-2xl font-semibold hover:bg-white/80 transition"
-          >
-            Send
-          </button>
-        </div>
+      <div className="flex gap-2 p-4 border-t border-[#111]">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+          placeholder="Type a message..."
+          className="flex-1 p-3 rounded-2xl bg-[#0b0b0b] placeholder-[var(--muted)] outline-none"
+        />
+        <button
+          onClick={sendMessage}
+          className="px-4 py-3 bg-[var(--accent)] rounded-2xl font-semibold hover:bg-white/80 transition"
+        >
+          Send
+        </button>
       </div>
     </div>
   );

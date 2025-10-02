@@ -1,75 +1,96 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { db } from "../firebase";
-import { collection, onSnapshot, query, orderBy } from "firebase/firestore";
+import { collection, onSnapshot, query, doc, getDoc } from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
 
 export default function Users({ onSelectUser }) {
-  const { user, signoutUser } = useAuth();
+  const { user } = useAuth();
   const [users, setUsers] = useState([]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState("");
+  const [unreadCounts, setUnreadCounts] = useState({});
 
   useEffect(() => {
-    const q = query(collection(db, 'users'), orderBy('name'));
-    const unsub = onSnapshot(q, snap => {
+    const q = query(collection(db, "users"));
+    const unsub = onSnapshot(q, async (snap) => {
       const list = [];
-      snap.forEach(doc => {
-        const u = doc.data();
-        if (u.uid !== user.uid && u.name.toLowerCase().includes(search.toLowerCase())) list.push(u);
+      snap.forEach((docSnap) => {
+        const u = docSnap.data();
+        if (u.uid !== user.uid && u.name.toLowerCase().includes(search.toLowerCase())) {
+          list.push(u);
+        }
       });
-      setUsers(list);
+
+      const sortedList = await Promise.all(
+        list.map(async (u) => {
+          const chatId = [user.uid, u.uid].sort().join("_");
+          const chatDoc = await getDoc(doc(db, "chats", chatId));
+          return {
+            ...u,
+            lastUpdated: chatDoc.exists() ? chatDoc.data().lastUpdated?.toMillis() || 0 : 0,
+          };
+        })
+      );
+
+      sortedList.sort((a, b) => (b.lastUpdated || 0) - (a.lastUpdated || 0));
+      setUsers(sortedList);
     });
-    return unsub;
+
+    return () => unsub();
   }, [search, user.uid]);
 
+  useEffect(() => {
+    const unsubscribers = [];
+
+    users.forEach((u) => {
+      const chatId = [user.uid, u.uid].sort().join("_");
+      const msgsRef = collection(db, "chats", chatId, "messages");
+      const unsubMsg = onSnapshot(msgsRef, (snap) => {
+        let count = 0;
+        snap.docs.forEach((msgDoc) => {
+          const msg = msgDoc.data();
+          if (msg.from === u.uid && !msg.seen) count++;
+        });
+        setUnreadCounts((prev) => ({ ...prev, [u.uid]: count }));
+      });
+      unsubscribers.push(unsubMsg);
+    });
+
+    return () => unsubscribers.forEach((unsub) => unsub());
+  }, [users, user.uid]);
+
   return (
-    <div className="flex flex-col md:flex-row h-screen">
-      {/* Sidebar */}
-      <aside className="md:w-[30%] w-full p-4 border-r border-[#111] flex flex-col">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <img src={user.photoURL} alt={user.displayName} className="w-12 h-12 rounded-full" />
-            <div>
-              <div className="font-bold">{user.displayName}</div>
-              <div className="text-sm text-[var(--muted)]">{user.email}</div>
-            </div>
-          </div>
-          <button
-            onClick={signoutUser}
-            className="text-sm border px-3 py-1 rounded hover:bg-white/10 transition"
+    <div className="flex flex-col gap-4">
+      <input
+        placeholder="Search users..."
+        className="p-2 rounded bg-[#0b0b0b] outline-none text-[var(--accent)]"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <div className="flex flex-col gap-2">
+        {users.map((u) => (
+          <div
+            key={u.uid}
+            onClick={() => onSelectUser(u)}
+            className="flex items-center justify-between p-2 rounded hover:bg-[#0b0b0b] transition cursor-pointer"
           >
-            Logout
-          </button>
-        </div>
-
-        <input
-          placeholder="Search users"
-          className="p-2 mb-3 rounded bg-[#0b0b0b] outline-none placeholder-[var(--muted)]"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-
-        <div className="flex-1 overflow-y-auto">
-          {users.map(u => (
-            <div
-              key={u.uid}
-              className="flex items-center p-2 gap-3 cursor-pointer hover:bg-[#0b0b0b] rounded"
-              onClick={() => onSelectUser(u)}
-            >
-              <img src={u.photoURL} alt={u.name} className="w-10 h-10 rounded-full" />
-              <div>
-                <div className="font-semibold">{u.name}</div>
-                <div className="text-sm text-[var(--muted)]">{u.email}</div>
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <img src={u.photoURL} alt={u.name} className="w-10 h-10 rounded-full" />
+                {u.online && (
+                  <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border border-[#0b0b0b]" />
+                )}
               </div>
+              <div className="font-semibold text-[var(--accent)]">{u.name}</div>
             </div>
-          ))}
-          {users.length === 0 && <div className="m-auto text-[var(--muted)]">No users found</div>}
-        </div>
-      </aside>
-
-      {/* Chat placeholder */}
-      <main className="md:flex-1 w-full bg-[var(--bg)] flex items-center justify-center text-[var(--muted)]">
-        Select a user to chat
-      </main>
+            {unreadCounts[u.uid] > 0 && (
+              <span className="bg-red-500 text-white px-2 py-1 rounded-full text-xs">
+                {unreadCounts[u.uid]}
+              </span>
+            )}
+          </div>
+        ))}
+        {users.length === 0 && <div className="text-[var(--muted)]">No users found</div>}
+      </div>
     </div>
   );
 }
