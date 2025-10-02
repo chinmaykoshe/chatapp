@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* custom colors */
+:root {
+  --bg: #0f0f10;
+  --panel: #111;
+  --muted: #bdbdbd;
+  --accent: #ffffff;
+}
+body {
+  background: linear-gradient(180deg,#000,#0b0b0b);
+}
