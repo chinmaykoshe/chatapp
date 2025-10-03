@@ -24,11 +24,10 @@ export default function Chat({ otherUser, onClose, isOpen }) {
   const [hasMore, setHasMore] = useState(true);
   const [newMsgCount, setNewMsgCount] = useState(0);
   const containerRef = useRef();
-  const observerRefs = useRef({});
 
   const CHAT_BATCH_SIZE = 25;
 
-  // ✅ Wrap getChatId with useCallback
+  // ✅ Stable getChatId
   const getChatId = useCallback(async () => {
     const possibleChatIds = [
       `${user.uid}_${otherUser.uid}`,
@@ -41,7 +40,7 @@ export default function Chat({ otherUser, onClose, isOpen }) {
     return [user.uid, otherUser.uid].sort().join("_");
   }, [user.uid, otherUser?.uid]);
 
-  // Load messages batch
+  // ✅ Load messages batch
   const loadMessages = useCallback(
     async (loadOlder = false) => {
       if (!otherUser) return;
@@ -76,10 +75,10 @@ export default function Chat({ otherUser, onClose, isOpen }) {
         setHasMore(false);
       }
     },
-    [otherUser, lastVisible, getChatId] // ✅ added getChatId
+    [otherUser, lastVisible, getChatId]
   );
 
-  // Listen to new messages in real-time
+  // ✅ Real-time listener
   useEffect(() => {
     if (!otherUser) return;
     let unsub;
@@ -92,7 +91,7 @@ export default function Chat({ otherUser, onClose, isOpen }) {
         const msgs = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         setMessages(msgs);
 
-        // Count new messages not in view
+        // Count new messages
         const unseenCount = msgs.filter(
           (m) => m.from === otherUser.uid && !m.seen
         ).length;
@@ -101,9 +100,27 @@ export default function Chat({ otherUser, onClose, isOpen }) {
     };
     setupListener();
     return () => unsub?.();
-  }, [otherUser, getChatId]); // ✅ added getChatId
+  }, [otherUser, getChatId]);
 
-  // Handle sending message
+  // ✅ Mark messages as seen when loaded
+  useEffect(() => {
+    if (!otherUser || !messages.length) return;
+
+    const markSeen = async () => {
+      const chatId = await getChatId();
+      const updates = messages
+        .filter((m) => m.from === otherUser.uid && !m.seen)
+        .map((m) => {
+          const msgRef = doc(db, "chats", chatId, "messages", m.id);
+          return setDoc(msgRef, { seen: true }, { merge: true });
+        });
+      if (updates.length > 0) await Promise.all(updates);
+    };
+
+    markSeen();
+  }, [messages, otherUser, getChatId]);
+
+  // ✅ Send message
   const sendMessage = async () => {
     if (!text.trim() || !otherUser) return;
     const chatId = [user.uid, otherUser.uid].sort().join("_");
@@ -129,7 +146,7 @@ export default function Chat({ otherUser, onClose, isOpen }) {
     setText("");
   };
 
-  // Scroll handler
+  // ✅ Scroll helper
   const scrollToBottom = () => {
     if (!containerRef.current) return;
     containerRef.current.scrollTo({
@@ -139,29 +156,7 @@ export default function Chat({ otherUser, onClose, isOpen }) {
     setNewMsgCount(0);
   };
 
-  // IntersectionObserver to mark messages as seen
-  const observeMessage = (id) => (node) => {
-    if (node) {
-      if (observerRefs.current[id]) observerRefs.current[id].disconnect();
-      const observer = new IntersectionObserver(
-        async (entries) => {
-          entries.forEach(async (entry) => {
-            if (entry.isIntersecting) {
-              const chatId = await getChatId();
-              const msgRef = doc(db, "chats", chatId, "messages", id);
-              await setDoc(msgRef, { seen: true }, { merge: true });
-              observer.disconnect();
-            }
-          });
-        },
-        { threshold: 0.8 }
-      );
-      observer.observe(node);
-      observerRefs.current[id] = observer;
-    }
-  };
-
-  // Handle scroll for loading older messages
+  // ✅ Infinite scroll for older messages
   const handleScroll = () => {
     if (!containerRef.current || !hasMore) return;
     if (containerRef.current.scrollTop < 50) {
@@ -207,7 +202,6 @@ export default function Chat({ otherUser, onClose, isOpen }) {
           return (
             <div
               key={m.id}
-              ref={observeMessage(m.id)}
               className={`max-w-[70%] p-3 rounded-xl ${
                 isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"
               }`}
