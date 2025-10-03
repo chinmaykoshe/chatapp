@@ -12,7 +12,6 @@ export default function ProfileCard() {
   const [preview, setPreview] = useState(
     user.photoURL || `https://i.pravatar.cc/100?u=${user.uid}`
   );
-  const [longPressTimer, setLongPressTimer] = useState(null);
   const [showActions, setShowActions] = useState(false);
   const [notifGranted, setNotifGranted] = useState(
     Notification.permission === "granted"
@@ -43,9 +42,13 @@ export default function ProfileCard() {
     }
   };
 
-  // Request notification permission
-  const requestNotificationPermission = () => {
-    if (Notification.permission !== "granted") {
+  // Toggle notifications
+  const toggleNotificationPermission = () => {
+    if (Notification.permission === "granted") {
+      alert(
+        "Permission already granted. To revoke, please disable notifications from your browser settings."
+      );
+    } else {
       Notification.requestPermission().then((permission) => {
         if (permission === "granted") {
           setNotifGranted(true);
@@ -55,30 +58,16 @@ export default function ProfileCard() {
     }
   };
 
-  // Revoke notification (browser only allows manual revoke)
-  const revokeNotificationPermission = () => {
-    alert(
-      "To revoke notifications, please disable them from your browser settings."
-    );
+  // Confirm logout
+  const confirmLogout = () => {
+    if (window.confirm("Are you sure you want to log out?")) {
+      signOut(auth);
+    }
   };
 
-  // Long press to reveal actions
-  const handleMouseDown = () => {
-    const timer = setTimeout(() => {
-      setShowActions(true);
-      setEditing(true);
-    }, 800); // 800ms long press
-    setLongPressTimer(timer);
-  };
-
-  const handleMouseUp = () => {
-    clearTimeout(longPressTimer);
-  };
-
-  // Double click to reveal actions
+  // Double click to toggle panel
   const handleDoubleClick = () => {
-    setShowActions(true);
-    setEditing(true);
+    setShowActions((prev) => !prev);
   };
 
   return (
@@ -89,13 +78,9 @@ export default function ProfileCard() {
           src={preview}
           alt={name || "User"}
           className="w-16 h-16 rounded-full object-cover cursor-pointer"
-          onMouseDown={handleMouseDown}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onTouchStart={handleMouseDown}
-          onTouchEnd={handleMouseUp}
           onDoubleClick={handleDoubleClick}
         />
+
         {editing ? (
           <div className="flex-1 flex flex-col gap-2">
             <input
@@ -118,59 +103,45 @@ export default function ProfileCard() {
             </div>
           </div>
         )}
-
-        {/* Edit / Save button */}
-        <button
-          onClick={() => {
-            if (editing) {
-              handleSave();
-            } else {
-              setEditing(true);
-            }
-          }}
-          className="border border-[var(--accent)] px-4 py-1 rounded hover:bg-white/10 transition"
-        >
-          {editing ? "Save" : "Edit"}
-        </button>
-
-        {/* Cancel button */}
-        {editing && (
-          <button
-            onClick={() => setEditing(false)}
-            className="border border-[var(--accent)] px-4 py-1 rounded hover:bg-white/10 transition"
-          >
-            Cancel
-          </button>
-        )}
       </div>
 
-      {/* Actions (appear below card only if long press / double click) */}
+      {/* Action Panel (toggles with double click) */}
       {showActions && (
-        <div className="flex gap-3 mt-2 w-full">
-          {/* Notification button */}
+        <div className="flex items-center gap-4 mt-3 w-full border-t border-[#222] pt-3">
+          {/* ✏️ Edit / Save */}
           <button
-            onClick={requestNotificationPermission}
-            disabled={notifGranted}
-            className={`border px-4 py-1 rounded transition ${
+            onClick={() => {
+              if (editing) {
+                handleSave();
+              } else {
+                setEditing(true);
+              }
+            }}
+            className="border border-[var(--accent)] text-[var(--accent)] px-4 py-1 rounded hover:bg-white/10 transition"
+          >
+            {editing ? "Save" : "Edit"}
+          </button>
+
+          {/* 🔔 Notification Bell */}
+          <button
+            onClick={toggleNotificationPermission}
+            className="text-2xl text-[var(--accent)] hover:scale-110 transition"
+            title={
               notifGranted
-                ? "border-gray-500 text-gray-400 cursor-not-allowed"
-                : "border-[var(--accent)] text-[var(--accent)] hover:bg-white/10"
-            }`}
+                ? "Permission granted (click to see revoke info)"
+                : "Enable notifications"
+            }
           >
-            {notifGranted ? "Permission Granted" : "Enable Notifications"}
+            {notifGranted ? (
+              <i className="fa-solid fa-bell"></i>
+            ) : (
+              <i className="fa-regular fa-bell"></i>
+            )}
           </button>
 
-          {/* Revoke notifications */}
+          {/* 🚪 Logout */}
           <button
-            onClick={revokeNotificationPermission}
-            className="border border-red-500 text-red-400 px-4 py-1 rounded hover:bg-red-500/20 transition"
-          >
-            Revoke
-          </button>
-
-          {/* Logout */}
-          <button
-            onClick={() => signOut(auth)}
+            onClick={confirmLogout}
             className="border border-red-500 text-red-400 px-4 py-1 rounded hover:bg-red-500/20 transition"
           >
             Logout
