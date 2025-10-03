@@ -10,7 +10,6 @@ import {
   addDoc,
   doc,
   setDoc,
-  writeBatch,
   Timestamp,
   getDocs,
   getDoc,
@@ -29,15 +28,18 @@ export default function Chat({ otherUser, onClose, isOpen }) {
 
   const CHAT_BATCH_SIZE = 25;
 
-  // Get chatId
-  const getChatId = async () => {
-    const possibleChatIds = [`${user.uid}_${otherUser.uid}`, `${otherUser.uid}_${user.uid}`];
+  // ✅ Wrap getChatId with useCallback
+  const getChatId = useCallback(async () => {
+    const possibleChatIds = [
+      `${user.uid}_${otherUser.uid}`,
+      `${otherUser.uid}_${user.uid}`,
+    ];
     for (let id of possibleChatIds) {
       const docSnap = await getDoc(doc(db, "chats", id));
       if (docSnap.exists()) return id;
     }
     return [user.uid, otherUser.uid].sort().join("_");
-  };
+  }, [user.uid, otherUser?.uid]);
 
   // Load messages batch
   const loadMessages = useCallback(
@@ -49,12 +51,20 @@ export default function Chat({ otherUser, onClose, isOpen }) {
       let q = query(msgsRef, orderBy("ts", "desc"), limit(CHAT_BATCH_SIZE));
 
       if (loadOlder && lastVisible) {
-        q = query(msgsRef, orderBy("ts", "desc"), startAfter(lastVisible), limit(CHAT_BATCH_SIZE));
+        q = query(
+          msgsRef,
+          orderBy("ts", "desc"),
+          startAfter(lastVisible),
+          limit(CHAT_BATCH_SIZE)
+        );
       }
 
       const snap = await getDocs(q);
       if (!snap.empty) {
-        const msgsBatch = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        const msgsBatch = snap.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
         if (loadOlder) {
           setMessages((prev) => [...prev, ...msgsBatch]);
         } else {
@@ -66,7 +76,7 @@ export default function Chat({ otherUser, onClose, isOpen }) {
         setHasMore(false);
       }
     },
-    [otherUser, lastVisible]
+    [otherUser, lastVisible, getChatId] // ✅ added getChatId
   );
 
   // Listen to new messages in real-time
@@ -83,16 +93,17 @@ export default function Chat({ otherUser, onClose, isOpen }) {
         setMessages(msgs);
 
         // Count new messages not in view
-        const unseenCount = msgs.filter((m) => m.from === otherUser.uid && !m.seen).length;
+        const unseenCount = msgs.filter(
+          (m) => m.from === otherUser.uid && !m.seen
+        ).length;
         setNewMsgCount(unseenCount);
       });
     };
     setupListener();
     return () => unsub?.();
-  }, [otherUser]);
+  }, [otherUser, getChatId]); // ✅ added getChatId
 
   // Handle sending message
-  // In sendMessage, remove auto scroll
   const sendMessage = async () => {
     if (!text.trim() || !otherUser) return;
     const chatId = [user.uid, otherUser.uid].sort().join("_");
@@ -116,31 +127,35 @@ export default function Chat({ otherUser, onClose, isOpen }) {
     );
 
     setText("");
-    // Remove scrollToBottom() here
   };
 
-  // Remove the timeout and auto-scroll
+  // Scroll handler
   const scrollToBottom = () => {
     if (!containerRef.current) return;
-    containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: "smooth" });
+    containerRef.current.scrollTo({
+      top: containerRef.current.scrollHeight,
+      behavior: "smooth",
+    });
     setNewMsgCount(0);
   };
-
 
   // IntersectionObserver to mark messages as seen
   const observeMessage = (id) => (node) => {
     if (node) {
       if (observerRefs.current[id]) observerRefs.current[id].disconnect();
-      const observer = new IntersectionObserver(async (entries) => {
-        entries.forEach(async (entry) => {
-          if (entry.isIntersecting) {
-            const chatId = await getChatId();
-            const msgRef = doc(db, "chats", chatId, "messages", id);
-            await setDoc(msgRef, { seen: true }, { merge: true });
-            observer.disconnect();
-          }
-        });
-      }, { threshold: 0.8 });
+      const observer = new IntersectionObserver(
+        async (entries) => {
+          entries.forEach(async (entry) => {
+            if (entry.isIntersecting) {
+              const chatId = await getChatId();
+              const msgRef = doc(db, "chats", chatId, "messages", id);
+              await setDoc(msgRef, { seen: true }, { merge: true });
+              observer.disconnect();
+            }
+          });
+        },
+        { threshold: 0.8 }
+      );
       observer.observe(node);
       observerRefs.current[id] = observer;
     }
@@ -161,13 +176,24 @@ export default function Chat({ otherUser, onClose, isOpen }) {
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-[#111]">
         <div className="flex items-center gap-3">
-          <img src={otherUser.photoURL} alt={otherUser.name} className="w-12 h-12 rounded-full" />
+          <img
+            src={otherUser.photoURL}
+            alt={otherUser.name}
+            className="w-12 h-12 rounded-full"
+          />
           <div>
             <div className="font-bold">{otherUser.name}</div>
-            <div className="text-sm text-[var(--muted)]">{otherUser.online ? "Online" : "Offline"}</div>
+            <div className="text-sm text-[var(--muted)]">
+              {otherUser.online ? "Online" : "Offline"}
+            </div>
           </div>
         </div>
-        <button onClick={onClose} className="border px-3 py-1 rounded hover:bg-white/10 transition">Back</button>
+        <button
+          onClick={onClose}
+          className="border px-3 py-1 rounded hover:bg-white/10 transition"
+        >
+          Back
+        </button>
       </div>
 
       {/* Messages */}
@@ -182,14 +208,23 @@ export default function Chat({ otherUser, onClose, isOpen }) {
             <div
               key={m.id}
               ref={observeMessage(m.id)}
-              className={`max-w-[70%] p-3 rounded-xl ${isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"}`}
+              className={`max-w-[70%] p-3 rounded-xl ${
+                isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"
+              }`}
             >
               <div>{m.text}</div>
               <div className="text-[var(--muted)] text-xs mt-1 flex justify-end gap-1 items-center">
                 {m.ts?.seconds &&
-                  new Date(m.ts.seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  new Date(m.ts.seconds * 1000).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
                 {isSent && (
-                  <span className={`ml-1 text-sm ${m.seen ? "text-green-500" : "text-blue-400"}`}>
+                  <span
+                    className={`ml-1 text-sm ${
+                      m.seen ? "text-green-500" : "text-blue-400"
+                    }`}
+                  >
                     {m.seen ? "✔✔" : "✔"}
                   </span>
                 )}
