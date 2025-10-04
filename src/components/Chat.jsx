@@ -87,7 +87,7 @@ export default function Chat({ otherUser, onClose }) {
   };
 
   // ------------------- Notifications -------------------
-  const notifyUser = async (latestMsg, chatId) => {
+  const notifyUser = useCallback(async (latestMsg, chatId) => {
     if ("Notification" in window && Notification.permission !== "granted") {
       const permission = await Notification.requestPermission();
       if (permission !== "granted") return;
@@ -107,7 +107,7 @@ export default function Chat({ otherUser, onClose }) {
         icon: otherUser.photoURL || "/default-avatar.png",
       });
     }
-  };
+  }, [otherUser]);
 
   // ------------------- Autofocus Input -------------------
   useEffect(() => {
