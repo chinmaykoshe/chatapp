@@ -5,126 +5,52 @@ import {
   query,
   orderBy,
   limit,
-  startAfter,
   onSnapshot,
   addDoc,
   doc,
   setDoc,
   Timestamp,
-  getDocs,
   getDoc,
 } from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
 import Avatar from "./Avatar";
+import UserStatus from "../context/UserStatus";
 
-export default function Chat({ otherUser, onClose, isOpen }) {
+export default function Chat({ otherUser, onClose }) {
   const { user } = useAuth();
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
-  const [lastVisible, setLastVisible] = useState(null);
-  const [hasMore, setHasMore] = useState(true);
   const [newMsgCount, setNewMsgCount] = useState(0);
   const containerRef = useRef();
+  const chatIdRef = useRef(null);
+  const inputRef = useRef();
 
   const CHAT_BATCH_SIZE = 25;
 
-  // ✅ Stable getChatId
+  // Stable chatId
   const getChatId = useCallback(async () => {
-    const possibleChatIds = [
-      `${user.uid}_${otherUser.uid}`,
-      `${otherUser.uid}_${user.uid}`,
-    ];
+    if (!user || !otherUser) return null;
+    if (chatIdRef.current) return chatIdRef.current;
+
+    const possibleChatIds = [`${user.uid}_${otherUser.uid}`, `${otherUser.uid}_${user.uid}`];
     for (let id of possibleChatIds) {
       const docSnap = await getDoc(doc(db, "chats", id));
-      if (docSnap.exists()) return id;
+      if (docSnap.exists()) {
+        chatIdRef.current = id;
+        return id;
+      }
     }
-    return [user.uid, otherUser.uid].sort().join("_");
-  }, [user.uid, otherUser?.uid]);
 
-  // ✅ Load messages batch
-  const loadMessages = useCallback(
-    async (loadOlder = false) => {
-      if (!otherUser) return;
-      const chatId = await getChatId();
-      const msgsRef = collection(db, "chats", chatId, "messages");
+    const newId = [user.uid, otherUser.uid].sort().join("_");
+    chatIdRef.current = newId;
+    return newId;
+  }, [user, otherUser]);
 
-      let q = query(msgsRef, orderBy("ts", "desc"), limit(CHAT_BATCH_SIZE));
-
-      if (loadOlder && lastVisible) {
-        q = query(
-          msgsRef,
-          orderBy("ts", "desc"),
-          startAfter(lastVisible),
-          limit(CHAT_BATCH_SIZE)
-        );
-      }
-
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const msgsBatch = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        if (loadOlder) {
-          setMessages((prev) => [...prev, ...msgsBatch]);
-        } else {
-          setMessages(msgsBatch);
-        }
-        setLastVisible(snap.docs[snap.docs.length - 1]);
-        if (snap.docs.length < CHAT_BATCH_SIZE) setHasMore(false);
-      } else {
-        setHasMore(false);
-      }
-    },
-    [otherUser, lastVisible, getChatId]
-  );
-
-  // ✅ Real-time listener
-  useEffect(() => {
-    if (!otherUser) return;
-    let unsub;
-    const setupListener = async () => {
-      const chatId = await getChatId();
-      const msgsRef = collection(db, "chats", chatId, "messages");
-      const q = query(msgsRef, orderBy("ts", "desc"), limit(CHAT_BATCH_SIZE));
-
-      unsub = onSnapshot(q, (snap) => {
-        const msgs = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        setMessages(msgs);
-
-        // Count new messages
-        const unseenCount = msgs.filter(
-          (m) => m.from === otherUser.uid && !m.seen
-        ).length;
-        setNewMsgCount(unseenCount);
-      });
-    };
-    setupListener();
-    return () => unsub?.();
-  }, [otherUser, getChatId]);
-
-  // ✅ Mark messages as seen when loaded
-  useEffect(() => {
-    if (!otherUser || !messages.length) return;
-
-    const markSeen = async () => {
-      const chatId = await getChatId();
-      const updates = messages
-        .filter((m) => m.from === otherUser.uid && !m.seen)
-        .map((m) => {
-          const msgRef = doc(db, "chats", chatId, "messages", m.id);
-          return setDoc(msgRef, { seen: true }, { merge: true });
-        });
-      if (updates.length > 0) await Promise.all(updates);
-    };
-
-    markSeen();
-  }, [messages, otherUser, getChatId]);
-
-  // ✅ Send message
+  // Send message
   const sendMessage = async () => {
-    if (!text.trim() || !otherUser) return;
-    const chatId = [user.uid, otherUser.uid].sort().join("_");
+    if (!text.trim() || !user || !otherUser) return;
+    const chatId = await getChatId();
+    if (!chatId) return;
 
     const msg = {
       text: text.trim(),
@@ -147,43 +73,112 @@ export default function Chat({ otherUser, onClose, isOpen }) {
     setText("");
   };
 
-  // ✅ Scroll helper
+  // Scroll to bottom
   const scrollToBottom = () => {
     if (!containerRef.current) return;
-    containerRef.current.scrollTo({
-      top: containerRef.current.scrollHeight,
-      behavior: "smooth",
-    });
+    containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: "smooth" });
     setNewMsgCount(0);
   };
 
-  // ✅ Infinite scroll for older messages
-  const handleScroll = () => {
-    if (!containerRef.current || !hasMore) return;
-    if (containerRef.current.scrollTop < 50) {
-      loadMessages(true);
+  // Notifications
+  const notifyUser = (latestMsg, chatId) => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.ready.then((reg) => {
+        reg.showNotification(`New message from ${otherUser.name}`, {
+          body: latestMsg.text,
+          icon: otherUser.photoURL || "/default-avatar.png",
+          data: { chatId }, // For redirection
+        });
+      });
+    } else if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(`New message from ${otherUser.name}`, {
+        body: latestMsg.text,
+        icon: otherUser.photoURL || "/default-avatar.png",
+      });
     }
   };
 
-  if (!otherUser) return null;
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Real-time messages + notifications
+  useEffect(() => {
+    if (!user || !otherUser) return;
+    let unsub;
+    const lastNotifiedMsgRef = { current: null };
+
+    const setupListener = async () => {
+      const chatId = await getChatId();
+      if (!chatId) return;
+
+      const msgsRef = collection(db, "chats", chatId, "messages");
+      const q = query(msgsRef, orderBy("ts", "desc"), limit(CHAT_BATCH_SIZE));
+
+      unsub = onSnapshot(q, (snap) => {
+        const msgs = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        setMessages(msgs);
+
+        const unseenCount = msgs.filter((m) => m.from === otherUser.uid && !m.seen).length;
+        setNewMsgCount(unseenCount);
+
+        const latestMsg = msgs[0];
+        if (
+          latestMsg &&
+          latestMsg.from === otherUser.uid &&
+          !latestMsg.seen &&
+          lastNotifiedMsgRef.current !== latestMsg.id
+        ) {
+          lastNotifiedMsgRef.current = latestMsg.id;
+
+          // Audio notification
+          const audio = new Audio(process.env.PUBLIC_URL + "/notification.mp3");
+          audio.play().catch(() => { });
+
+          // Browser/service worker notification
+          notifyUser(latestMsg, chatId);
+        }
+      });
+    };
+
+    setupListener();
+    return () => unsub?.();
+  }, [user, otherUser, getChatId]);
+
+  // Mark messages as seen
+  useEffect(() => {
+    if (!user || !otherUser || messages.length === 0) return;
+
+    const markSeen = async () => {
+      const chatId = await getChatId();
+      if (!chatId) return;
+
+      const updates = messages
+        .filter((m) => m.from === otherUser.uid && !m.seen)
+        .map((m) =>
+          setDoc(doc(db, "chats", chatId, "messages", m.id), { seen: true }, { merge: true })
+        );
+
+      if (updates.length) await Promise.all(updates);
+    };
+
+    markSeen();
+  }, [messages, user, otherUser, getChatId]);
 
   return (
     <div className="fixed top-0 left-0 w-full h-full bg-[var(--bg)] flex flex-col z-50">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-[#111]">
         <div className="flex items-center gap-3">
-          <Avatar src={otherUser.photoURL} name={otherUser.name} size={40} />
+          <Avatar src={otherUser?.photoURL} name={otherUser?.name} size={40} />
           <div>
-            <div className="font-bold">{otherUser.name}</div>
+            <div className="font-bold text-white">{otherUser?.name || "User"}</div>
             <div className="text-sm text-[var(--muted)]">
-              {otherUser.online ? "Online" : "Offline"}
+              <UserStatus uid={otherUser?.uid} />
             </div>
           </div>
         </div>
-        <button
-          onClick={onClose}
-          className="border px-3 py-1 rounded hover:bg-white/10 transition"
-        >
+        <button onClick={onClose} className="border px-3 py-1 rounded hover:bg-white/10 transition">
           Back
         </button>
       </div>
@@ -192,16 +187,17 @@ export default function Chat({ otherUser, onClose, isOpen }) {
       <div
         className="flex-1 overflow-y-auto p-4 flex flex-col-reverse gap-3 bg-[#111]"
         ref={containerRef}
-        onScroll={handleScroll}
       >
+        {messages.length === 0 && (
+          <div className="text-[var(--muted)] text-center mt-5">No messages yet</div>
+        )}
         {messages.map((m) => {
           const isSent = m.from === user.uid;
           return (
             <div
               key={m.id}
-              className={`max-w-[70%] p-3 rounded-xl ${
-                isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"
-              }`}
+              className={`max-w-[70%] p-3 rounded-xl ${isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"
+                }`}
             >
               <div>{m.text}</div>
               <div className="text-[var(--muted)] text-xs mt-1 flex justify-end gap-1 items-center">
@@ -211,11 +207,7 @@ export default function Chat({ otherUser, onClose, isOpen }) {
                     minute: "2-digit",
                   })}
                 {isSent && (
-                  <span
-                    className={`ml-1 text-sm ${
-                      m.seen ? "text-green-500" : "text-blue-400"
-                    }`}
-                  >
+                  <span className={`ml-1 text-sm ${m.seen ? "text-green-500" : "text-blue-400"}`}>
                     {m.seen ? "✔✔" : "✔"}
                   </span>
                 )}
@@ -237,6 +229,7 @@ export default function Chat({ otherUser, onClose, isOpen }) {
       <div className="flex gap-2 p-4 border-t border-[#111]">
         <input
           value={text}
+          ref={inputRef}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
           placeholder="Type a message..."
