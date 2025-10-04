@@ -24,31 +24,32 @@ export default function Chat({ otherUser, onClose }) {
   const containerRef = useRef();
   const chatIdRef = useRef(null);
   const inputRef = useRef();
-
+  const fileInputRef = useRef();
   const CHAT_BATCH_SIZE = 25;
 
-  // Stable chatId
+  // ------------------- Helper: Get Chat ID -------------------
   const getChatId = useCallback(async () => {
     if (!user || !otherUser) return null;
     if (chatIdRef.current) return chatIdRef.current;
 
-    const possibleChatIds = [`${user.uid}_${otherUser.uid}`, `${otherUser.uid}_${user.uid}`];
-    for (let id of possibleChatIds) {
+    const possibleIds = [`${user.uid}_${otherUser.uid}`, `${otherUser.uid}_${user.uid}`];
+    for (let id of possibleIds) {
       const docSnap = await getDoc(doc(db, "chats", id));
       if (docSnap.exists()) {
         chatIdRef.current = id;
         return id;
       }
     }
-
     const newId = [user.uid, otherUser.uid].sort().join("_");
     chatIdRef.current = newId;
     return newId;
   }, [user, otherUser]);
 
-  // Send message
+  // ------------------- Send Text Message -------------------
   const sendMessage = async () => {
-    if (!text.trim() || !user || !otherUser) return;
+    if (!text.trim()) return; // Prevent sending empty text
+    if (!user || !otherUser) return;
+
     const chatId = await getChatId();
     if (!chatId) return;
 
@@ -73,36 +74,47 @@ export default function Chat({ otherUser, onClose }) {
     setText("");
   };
 
-  // Scroll to bottom
+  // ------------------- Handle File Upload (Coming Soon) -------------------
+  const handleFileUpload = async () => {
+    alert("File upload coming soon! 🚧");
+  };
+
+  // ------------------- Scroll to Bottom -------------------
   const scrollToBottom = () => {
     if (!containerRef.current) return;
     containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: "smooth" });
     setNewMsgCount(0);
   };
 
-  // Notifications
-  const notifyUser = (latestMsg, chatId) => {
+  // ------------------- Notifications -------------------
+  const notifyUser = async (latestMsg, chatId) => {
+    if ("Notification" in window && Notification.permission !== "granted") {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") return;
+    }
+
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.ready.then((reg) => {
         reg.showNotification(`New message from ${otherUser.name}`, {
-          body: latestMsg.text,
+          body: latestMsg.text || "📎 File",
           icon: otherUser.photoURL || "/default-avatar.png",
-          data: { chatId }, // For redirection
+          data: { chatId },
         });
       });
     } else if ("Notification" in window && Notification.permission === "granted") {
       new Notification(`New message from ${otherUser.name}`, {
-        body: latestMsg.text,
+        body: latestMsg.text || "📎 File",
         icon: otherUser.photoURL || "/default-avatar.png",
       });
     }
   };
 
+  // ------------------- Autofocus Input -------------------
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // Real-time messages + notifications
+  // ------------------- Real-time Messages -------------------
   useEffect(() => {
     if (!user || !otherUser) return;
     let unsub;
@@ -131,11 +143,9 @@ export default function Chat({ otherUser, onClose }) {
         ) {
           lastNotifiedMsgRef.current = latestMsg.id;
 
-          // Audio notification
           const audio = new Audio(process.env.PUBLIC_URL + "/notification.mp3");
           audio.play().catch(() => { });
 
-          // Browser/service worker notification
           notifyUser(latestMsg, chatId);
         }
       });
@@ -145,7 +155,7 @@ export default function Chat({ otherUser, onClose }) {
     return () => unsub?.();
   }, [user, otherUser, getChatId]);
 
-  // Mark messages as seen
+  // ------------------- Mark Messages Seen -------------------
   useEffect(() => {
     if (!user || !otherUser || messages.length === 0) return;
 
@@ -155,9 +165,7 @@ export default function Chat({ otherUser, onClose }) {
 
       const updates = messages
         .filter((m) => m.from === otherUser.uid && !m.seen)
-        .map((m) =>
-          setDoc(doc(db, "chats", chatId, "messages", m.id), { seen: true }, { merge: true })
-        );
+        .map((m) => setDoc(doc(db, "chats", chatId, "messages", m.id), { seen: true }, { merge: true }));
 
       if (updates.length) await Promise.all(updates);
     };
@@ -165,6 +173,7 @@ export default function Chat({ otherUser, onClose }) {
     markSeen();
   }, [messages, user, otherUser, getChatId]);
 
+  // ------------------- Render -------------------
   return (
     <div className="fixed top-0 left-0 w-full h-full bg-[var(--bg)] flex flex-col z-50">
       {/* Header */}
@@ -184,28 +193,22 @@ export default function Chat({ otherUser, onClose }) {
       </div>
 
       {/* Messages */}
-      <div
-        className="flex-1 overflow-y-auto p-4 flex flex-col-reverse gap-3 bg-[#111]"
-        ref={containerRef}
-      >
+      <div className="flex-1 overflow-y-auto p-4 flex flex-col-reverse gap-3 bg-[#111]" ref={containerRef}>
         {messages.length === 0 && (
           <div className="text-[var(--muted)] text-center mt-5">No messages yet</div>
         )}
+
         {messages.map((m) => {
           const isSent = m.from === user.uid;
           return (
             <div
               key={m.id}
-              className={`max-w-[70%] p-3 rounded-xl ${isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"
-                }`}
+              className={`max-w-[70%] p-3 rounded-xl ${isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"}`}
             >
               <div>{m.text}</div>
               <div className="text-[var(--muted)] text-xs mt-1 flex justify-end gap-1 items-center">
                 {m.ts?.seconds &&
-                  new Date(m.ts.seconds * 1000).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+                  new Date(m.ts.seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 {isSent && (
                   <span className={`ml-1 text-sm ${m.seen ? "text-green-500" : "text-blue-400"}`}>
                     {m.seen ? "✔✔" : "✔"}
@@ -215,6 +218,7 @@ export default function Chat({ otherUser, onClose }) {
             </div>
           );
         })}
+
         {newMsgCount > 0 && (
           <button
             className="fixed bottom-24 left-1/2 transform -translate-x-1/2 bg-[var(--accent)] text-[var(--bg)] px-4 py-2 rounded-full"
@@ -235,6 +239,18 @@ export default function Chat({ otherUser, onClose }) {
           placeholder="Type a message..."
           className="flex-1 p-3 rounded-2xl bg-[#0b0b0b] placeholder-[var(--muted)] outline-none"
         />
+        <input
+          type="file"
+          className="hidden"
+          ref={fileInputRef}
+          onChange={handleFileUpload}
+        />
+        <button
+          onClick={() => fileInputRef.current.click()}
+          className="px-3 py-2 bg-gray-700 rounded hover:bg-gray-600"
+        >
+          📎
+        </button>
         <button
           onClick={sendMessage}
           className="px-4 py-3 bg-blue rounded-2xl font-semibold hover:bg-white/80 transition"
