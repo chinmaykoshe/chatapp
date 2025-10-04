@@ -24,7 +24,6 @@ export default function Chat({ otherUser, onClose }) {
   const containerRef = useRef();
   const chatIdRef = useRef(null);
   const inputRef = useRef();
-  const fileInputRef = useRef();
   const CHAT_BATCH_SIZE = 25;
 
   // ------------------- Helper: Get Chat ID -------------------
@@ -47,8 +46,7 @@ export default function Chat({ otherUser, onClose }) {
 
   // ------------------- Send Text Message -------------------
   const sendMessage = async () => {
-    if (!text.trim()) return; // Prevent sending empty text
-    if (!user || !otherUser) return;
+    if (!text.trim() || !user || !otherUser) return;
 
     const chatId = await getChatId();
     if (!chatId) return;
@@ -74,11 +72,6 @@ export default function Chat({ otherUser, onClose }) {
     setText("");
   };
 
-  // ------------------- Handle File Upload (Coming Soon) -------------------
-  const handleFileUpload = async () => {
-    alert("File upload coming soon! 🚧");
-  };
-
   // ------------------- Scroll to Bottom -------------------
   const scrollToBottom = () => {
     if (!containerRef.current) return;
@@ -87,27 +80,30 @@ export default function Chat({ otherUser, onClose }) {
   };
 
   // ------------------- Notifications -------------------
-  const notifyUser = useCallback(async (latestMsg, chatId) => {
-    if ("Notification" in window && Notification.permission !== "granted") {
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") return;
-    }
+  const notifyUser = useCallback(
+    async (latestMsg, chatId) => {
+      if ("Notification" in window && Notification.permission !== "granted") {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") return;
+      }
 
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.ready.then((reg) => {
-        reg.showNotification(`New message from ${otherUser.name}`, {
-          body: latestMsg.text || "📎 File",
-          icon: otherUser.photoURL || "/default-avatar.png",
-          data: { chatId },
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.ready.then((reg) => {
+          reg.showNotification(`New message from ${otherUser.name}`, {
+            body: latestMsg.text || "📎 Message",
+            icon: otherUser.photoURL || "/default-avatar.png",
+            data: { chatId },
+          });
         });
-      });
-    } else if ("Notification" in window && Notification.permission === "granted") {
-      new Notification(`New message from ${otherUser.name}`, {
-        body: latestMsg.text || "📎 File",
-        icon: otherUser.photoURL || "/default-avatar.png",
-      });
-    }
-  }, [otherUser]);
+      } else if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(`New message from ${otherUser.name}`, {
+          body: latestMsg.text || "📎 Message",
+          icon: otherUser.photoURL || "/default-avatar.png",
+        });
+      }
+    },
+    [otherUser]
+  );
 
   // ------------------- Autofocus Input -------------------
   useEffect(() => {
@@ -144,7 +140,7 @@ export default function Chat({ otherUser, onClose }) {
           lastNotifiedMsgRef.current = latestMsg.id;
 
           const audio = new Audio(process.env.PUBLIC_URL + "/notification.mp3");
-          audio.play().catch(() => { });
+          audio.play().catch(() => {});
 
           notifyUser(latestMsg, chatId);
         }
@@ -153,7 +149,7 @@ export default function Chat({ otherUser, onClose }) {
 
     setupListener();
     return () => unsub?.();
-  }, [user, otherUser, getChatId]);
+  }, [user, otherUser, getChatId, notifyUser]);
 
   // ------------------- Mark Messages Seen -------------------
   useEffect(() => {
@@ -203,7 +199,9 @@ export default function Chat({ otherUser, onClose }) {
           return (
             <div
               key={m.id}
-              className={`max-w-[70%] p-3 rounded-xl ${isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"}`}
+              className={`max-w-[70%] p-3 rounded-xl ${
+                isSent ? "self-end bg-[#222]" : "self-start bg-[#191919]"
+              }`}
             >
               <div>{m.text}</div>
               <div className="text-[var(--muted)] text-xs mt-1 flex justify-end gap-1 items-center">
@@ -239,18 +237,6 @@ export default function Chat({ otherUser, onClose }) {
           placeholder="Type a message..."
           className="flex-1 p-3 rounded-2xl bg-[#0b0b0b] placeholder-[var(--muted)] outline-none"
         />
-        <input
-          type="file"
-          className="hidden"
-          ref={fileInputRef}
-          onChange={handleFileUpload}
-        />
-        <button
-          onClick={() => fileInputRef.current.click()}
-          className="px-3 py-2 bg-gray-700 rounded hover:bg-gray-600"
-        >
-          📎
-        </button>
         <button
           onClick={sendMessage}
           className="px-4 py-3 bg-blue rounded-2xl font-semibold hover:bg-white/80 transition"
