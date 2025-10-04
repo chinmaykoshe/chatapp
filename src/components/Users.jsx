@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { db } from "../firebase";
 import { collection, onSnapshot, query, doc, getDoc } from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
+import Avatar from "./Avatar";
 
 export default function Users({ onSelectUser }) {
   const { user } = useAuth();
@@ -75,10 +76,7 @@ export default function Users({ onSelectUser }) {
           >
             <div className="flex items-center gap-3">
               <div className="relative">
-                <img src={u.photoURL} alt={u.name} className="w-10 h-10 rounded-full" />
-                {u.online && (
-                  <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border border-[#0b0b0b]" />
-                )}
+                <Avatar src={u.photoURL} name={u.name} size={40} />
               </div>
               <div className="font-semibold text-[var(--accent)]">{u.name}</div>
             </div>

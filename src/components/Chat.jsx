@@ -15,6 +15,7 @@ import {
   getDoc,
 } from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
+import Avatar from "./Avatar";
 
 export default function Chat({ otherUser, onClose, isOpen }) {
   const { user } = useAuth();
@@ -176,11 +177,7 @@ export default function Chat({ otherUser, onClose, isOpen }) {
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-[#111]">
         <div className="flex items-center gap-3">
-          <img
-            src={otherUser.photoURL}
-            alt={otherUser.name}
-            className="w-12 h-12 rounded-full"
-          />
+          <Avatar src={otherUser.photoURL} name={otherUser.name} size={40} />
           <div>
             <div className="font-bold">{otherUser.name}</div>
             <div className="text-sm text-[var(--muted)]">
@@ -253,7 +250,7 @@ export default function Chat({ otherUser, onClose, isOpen }) {
         />
         <button
           onClick={sendMessage}
-          className="px-4 py-3 bg-[var(--accent)] rounded-2xl font-semibold hover:bg-white/80 transition"
+          className="px-4 py-3 bg-blue rounded-2xl font-semibold hover:bg-white/80 transition"
         >
           Send
         </button>
